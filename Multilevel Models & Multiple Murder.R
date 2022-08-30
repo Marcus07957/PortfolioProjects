@@ -16,6 +16,10 @@ library('zoom')
 library('sjPlot')
 library('predictmeans')
 library('BayesFactor')
+library('fastDummies')
+library('stringr')
+library('R2MLwiN')
+library('nnet')
 
   # working directory
 setwd("/Users/marcu/OneDrive/Desktop/Uni/Dissertation/code")
@@ -29,7 +33,7 @@ rm(dates)
 #===============================================================================
 # Step 2: Exploration ----------------------------------------------------------
 #===============================================================================
-  # 2.1) Imputation -------------------------------------------------------------
+  # 2.1) Imputation ------------------------------------------------------------
 
 df$YearOfDeath[500] <- median(df$YearOfDeath)
 df$ConfessedKills[1758] <- median(df$ConfessedKills)
@@ -39,8 +43,9 @@ df$Race <-ifelse(df$Race=='White','White',
 df$Race <- as.factor(df$Race)
 
 df$Motive <- as.factor(df$Motive)
+
 #===============================================================================
-# step 3: Modelling ------------------------------------------------------------
+# step 3: Modeling -------------------------------------------------------------
 #===============================================================================
   # 3.1) Linear regression -----------------------------------------------------
   # Y = AgeFirstKill, X = Sex
@@ -205,19 +210,22 @@ rm(list=setdiff(ls(), "df"))
 dev.off()
     # generalized linear models used
 GLM_Base <- lm(AgeFirstKill ~ 1, data = df)
-GLM_Sex <- lm(AgeFirstKill ~ Sex, data = df)
-GLM_Race <- lm(AgeFirstKill ~ Race, data = df)
+GLM_Sex <- lm(AgeFirstKill ~ 1+Sex, data = df)
+GLM_Race <- lm(AgeFirstKill ~ 1+Race, data = df)
+GLM_Motive <- glm(AgeFirstKill~1+Motive, data = df)
 
     # multilevel models for no inputs
 baseline<- lmer(AgeFirstKill ~ 1 + (1 | Motive),data = df, REML=F)
 
     # multilevel models for Sex clustered on motive
-fixed_slopes_Sex <- lmer(AgeFirstKill ~ Sex + (1 | Motive),data = df, REML=F)
-random_slopes_Sex <- lmer(AgeFirstKill ~ Sex + (1+Sex | Motive),data = df, REML=F)
+fixed_slopes_Sex <- lmer(AgeFirstKill ~ 1+Sex + (1 | Motive),data = df, REML=F)
+random_slopes_Sex <- lmer(AgeFirstKill ~ 1+Sex + (1+Sex | Motive),data = df,
+                          REML=F)
 
     # multilevel models for Race clustered on motive
-fixed_slopes_Race<- lmer(AgeFirstKill ~ Race + (1 | Motive),data = df, REML=F)
-random_slopes_Race<- lmer(AgeFirstKill ~ Race + (1+Race|Motive),data = df, REML=F)
+fixed_slopes_Race<- lmer(AgeFirstKill ~ 1+Race + (1 | Motive),data = df, REML=F)
+random_slopes_Race<- lmer(AgeFirstKill ~ 1+Race + (1+Race|Motive),data = df, 
+                          REML=F)
 
   # 4.2) Likelihood ratio test -------------------------------------------------
     # function that outputs likelihood ratio test statistics
@@ -237,8 +245,8 @@ LRT(GLM_Race,random_slopes_Race)
 LRT(fixed_slopes_Race,random_slopes_Race)
 
     # quantile thresholds used
-qchisq(p=0.975,df=1)
-qchisq(p=0.975,df=2)
+qchisq(p=0.95,df=1)
+qchisq(p=0.95,df=2)
 
 
   # 4.3) Further Model comparison metrics---------------------------------------
@@ -261,6 +269,128 @@ FurtherMetrics(random_slopes_Sex)
 FurtherMetrics(GLM_Race)
 FurtherMetrics(fixed_slopes_Race)
 FurtherMetrics(random_slopes_Race)
+FurtherMetrics(GLM_Motive)
+
+#===============================================================================
+# step 5: Multivariate Modeling-------------------------------------------------
+#===============================================================================
+  # 5.1) Data Wrangling---------------------------------------------------------
+rm(list=setdiff(ls(), "df"))
+    # crime-scene data
+profile <- subset.data.frame(df,select=c(11:8,12,33:67))
+
+    # data wrangling
+profile$Motive <- as.character(profile$Motive)
+profile$Motive <- ifelse(profile$Motive=="Enjoyment/power",profile$Motive,
+                         'Other')
+profile$Motive <- as.factor(profile$Motive)
+
+profile$killer <- (as.factor(seq.int(nrow(profile))))
+
+profile$State <- ifelse(df$KilledInOneStateOnly==F,NA,profile$State)
+profile$State <- as.factor(profile$State)
+length(which(is.na(profile$State)))
+
+profile$Region <- ifelse(profile$State=="WA" | 
+                         profile$State=="OR" |
+                         profile$State=="CA" |
+                         profile$State=="NV" |
+                         profile$State=="ID" |
+                         profile$State=="MT" |
+                         profile$State=="WY" |
+                         profile$State=="UT" |
+                         profile$State=="CO","West",
+                         ifelse(profile$State=="AZ" |
+                               profile$State=="NM" |
+                               profile$State=="OK" |
+                               profile$State=="TX", "Southwest",
+                               ifelse(profile$State=="ND" |
+                                     profile$State=="MN" |
+                                     profile$State=="SD" |
+                                     profile$State=="KS" |
+                                     profile$State=="IA" |
+                                     profile$State=="MO" |
+                                     profile$State=="WI" |
+                                     profile$State=="IL" |
+                                     profile$State=="MI" |
+                                     profile$State=="IN" |
+                                     profile$State=="OH" |
+                                     profile$State=="NE", "Midwest",
+                                     ifelse(profile$State=="AR" |
+                                             profile$State=="LA" |
+                                             profile$State=="MS" |
+                                             profile$State=="AL" |
+                                             profile$State=="TN" |
+                                             profile$State=="GA" |
+                                             profile$State=="KY" |
+                                             profile$State=="FL" |
+                                             profile$State=="NC" |
+                                             profile$State=="SC" |
+                                             profile$State=="VA" |
+                                             profile$State=="DC" |
+                                             profile$State=="DE" |
+                                             profile$State=="WV", "Southeast",
+                                           ifelse(profile$State=="NA","NA",
+                                                  "Northeast")))))
+profile$Region <- as.factor(profile$Region)
+                         
+  
+  # 5.2) Modeling---------------------------------------------------------------
+rm(list=setdiff(ls(), c("df","profile")))
+    # 5.2.1) Univariate Binary Response Model-----------------------------------
+      # model
+profile_state <- profile[order(profile$State),]
+
+F0 <- logit(Race) ~ 1 + Whitevictims + (1 | State)
+UniModel1 <- runMLwiN(Formula=F0,D="Binomial",data=profile_state, 
+                      estoptions = list(resi.store=T))
+summary(UniModel1)
+
+      # residual checking
+state_residuals <- na.omit(UniModel1@residual[["lev_2_resi_est_Intercept"]])
+state_residuals_sd <- na.omit(UniModel1@residual[["lev_2_resi_var_Intercept"]]**0.5)
+pair <- data.frame(state_residuals,state_residuals_sd)
+pair <- pair[order(pair$state_residuals, decreasing = TRUE), ]
+qqnorm(state_residuals)
+qqline(state_residuals, col = 2,lwd=2,lty=1)
+
+par(lwd = 1,cex=1)
+x <-as.vector(summary(na.omit(profile_state$State)))
+y <- table(na.omit(profile_state$State))
+xx <- barplot(sort(x, decreasing = TRUE),axisnames = T,
+        names.arg=names(sort(y, decreasing = TRUE)), xlab= "State", 
+        ylab="Serial Killer Sample Size", space=0, las=2)
+text(x = xx,sort(x, decreasing = TRUE), label = sort(x, decreasing = TRUE), 
+     pos = 3, cex = 1, col = "red",srt=90)
+
+Indx <- seq(1,dim(pair)[1])
+plot(Indx,pair$state_residuals,pch=19,col="blue",
+     main="",xlab="State Index", ylab="Residual Value", ylim=c(-1,1.1))
+arrows(x0=Indx, y0=pair$state_residuals-pair$state_residuals_sd, x1=Indx,
+       y1=pair$state_residuals+pair$state_residuals_sd,
+       code=3, angle=90, length=0.05)       
 
 
+    # 5.2.2) Multivariate Binary Response Model---------------------------------
+rm(list=setdiff(ls(), c("df","profile","profile_state")))
+      # model
+F1 <- c(logit(Race),logit(Sex),logit(Motive)) ~ 1 + (1 | State)
+MultModel1 <- runMLwiN(Formula=F1, D=c("Mixed","Binomial","Binomial","Binomial")
+                       , data=profile_state, estoptions = list(Meth=0))
+summary(MultModel1)
 
+
+    # 5.2.3) Clustering By Region-----------------------------------------------
+profile_region <- profile[order(profile$Region),]
+
+F2 <- c(logit(Race),logit(Sex),logit(Motive)) ~ 1 + (1 | Region)
+MultModel2 <- runMLwiN(Formula=F2, D=c("Mixed","Binomial","Binomial","Binomial")
+                       , data=profile_region, estoptions=list())
+summary(MultModel2)
+
+    # 5.2.4) Adding predictor variables-----------------------------------------
+F3 <- c(logit(Race),logit(Sex),logit(Motive)) ~ 1 + RapedVictims + 
+  KilledWithGun + BoundVictims + (1 | State)
+MultModel3 <- runMLwiN(Formula=F3, D=c("Mixed","Binomial","Binomial","Binomial")
+                       , data=profile_state, estoptions = list(Meth=1))
+summary(MultModel3)
